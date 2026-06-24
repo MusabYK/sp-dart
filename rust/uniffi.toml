@@ -1,0 +1,7 @@
+[bindings.dart]
+cdylib_name = "sp_dart_ffi"
+
+# Dart package name for imports
+package_name = "sp_dart"
+
+async_runtime = "tokio"

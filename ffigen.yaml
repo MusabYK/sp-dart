@@ -1,0 +1,16 @@
+# Run with `dart run ffigen --config ffigen.yaml`.
+name: SpDartBindings
+description: |
+  Bindings for `src/sp_dart.h`.
+
+  Regenerate bindings with `dart run ffigen --config ffigen.yaml`.
+output: 'lib/sp_dart_bindings_generated.dart'
+headers:
+  entry-points:
+    - 'src/sp_dart.h'
+  include-directives:
+    - 'src/sp_dart.h'
+ffi-native:
+comments:
+  style: any
+  length: full
