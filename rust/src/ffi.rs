@@ -7,7 +7,6 @@ use std::sync::Arc; // constant-time ECDH — public API
 // bitcoin_hashes for the BIP-352 tagged hash
 use bitcoin_hashes::{sha256t_hash_newtype, Hash, HashEngine};
 
-// sp_lib = the external silentpayments crate
 use sp_lib::utils::{sending::calculate_partial_secret, OutPoint as SpOutPoint};
 use sp_lib::{Network as SpNetwork, SilentPaymentAddress as SpAddress, SpVersion};
 
@@ -47,20 +46,40 @@ fn compute_p_n(spend_public: &PublicKey, t_k: &SecretKey) -> Result<PublicKey, S
         .map_err(|e: secp256k1::Error| SilentPaymentError::CryptoError { msg: e.to_string() })
 }
 
-/// Shared helper: find an output amount by pubkey hex.
-fn find_output_amount(
-    expected_hex: &str,
-    expected_xonly_hex: &str,
-    output_pubkeys: &[String],
-    amounts: &[u64],
-) -> Option<u64> {
-    output_pubkeys
-        .iter()
-        .zip(amounts.iter())
-        .find(|(pk_hex, _)| {
-            pk_hex.as_str() == expected_hex || pk_hex.as_str() == expected_xonly_hex
-        })
-        .map(|(_, &amount)| amount)
+// BIP352/Label tagged hash
+// We also define the BIP-352/Label tagged hash for the tweak index server.
+sha256t_hash_newtype! {
+    struct BIP0352LabelTag = hash_str("BIP0352/Label");
+    #[hash_newtype(forward)]
+    struct BIP0352LabelHash(_);
+}
+
+/// Compute H_BIP0352/Label(b_scan.secret_bytes() || m.to_be_bytes()).
+/// Returns the raw 32-byte hash — treat it as a scalar, not a secret to expose.
+fn compute_label_hash(b_scan: &SecretKey, m: u32) -> [u8; 32] {
+    let mut engine = BIP0352LabelHash::engine();
+    engine.input(&b_scan.secret_bytes());
+    engine.input(&m.to_be_bytes());
+    BIP0352LabelHash::from_engine(engine).to_byte_array()
+}
+
+/// label_pubkey_m = H_BIP0352/Label(b_scan || m) × G
+///
+/// This is the PUBLIC point added to expected outputs during scanning.
+/// The underlying scalar (label hash) is never exposed outside this module.
+fn compute_label_pubkey(b_scan: &SecretKey, m: u32) -> Result<PublicKey, SilentPaymentError> {
+    let secp = Secp256k1::new();
+    let label_hash = compute_label_hash(b_scan, m);
+
+    // The hash bytes are used as a private scalar - same pattern as BDK's key derivation.
+    // SecretKey::from_slice validates the scalar is in [1, n-1].
+    let label_scalar = SecretKey::from_slice(&label_hash).map_err(|e: secp256k1::Error| {
+        SilentPaymentError::CryptoError {
+            msg: format!("Label {m} hash produced invalid scalar: {e}"),
+        }
+    })?;
+
+    Ok(PublicKey::from_secret_key(&secp, &label_scalar))
 }
 
 //  Error
@@ -256,9 +275,6 @@ impl SilentPaymentRecipient {
     /// SpAddress::new() returns Self (not Result),
     /// then Into<String> via encode feature.
     ///
-    /// Mainnet  → sp1q...
-    /// Testnet/Signet/Regtest → tsp1q... / sprt1q...
-    ///
     /// Delegates entirely to SpAddress - no manual bech32m code in ffi.rs.
     pub fn get_address(&self) -> SilentPaymentAddress {
         // SpAddress::new() - no ? needed, returns Self directly
@@ -278,6 +294,48 @@ impl SilentPaymentRecipient {
             spend_pubkey_hex: hex::encode(self.spend_public.serialize()),
             network: self.network,
         }
+    }
+
+    /// Derive the labeled sub-address for label m.
+    ///
+    /// # BIP-352 derivation
+    /// label_pubkey = H_BIP0352/Label(b_scan || m) × G
+    /// B_m          = B_spend + label_pubkey          (EC point addition)
+    /// address      = bech32m(hrp, version || B_scan || B_m)
+    ///
+    /// Share this address with a specific payer. All payments to it are
+    /// detected in a single scan pass alongside unlabeled payments.
+    ///
+    /// Label 0 is reserved by BIP-352 convention. Use labels >= 1.
+    pub fn get_labeled_address(
+        &self,
+        label: u32,
+    ) -> Result<SilentPaymentAddress, SilentPaymentError> {
+        // label_pubkey_m = H_BIP0352/Label(b_scan || m) × G
+        let label_pubkey = compute_label_pubkey(&self.scan_secret, label)?;
+
+        // B_m = B_spend + label_pubkey
+        let b_m = PublicKey::combine_keys(&[&self.spend_public, &label_pubkey]).map_err(
+            |e: secp256k1::Error| SilentPaymentError::CryptoError {
+                msg: format!("Failed to derive labeled spend key for m={label}: {e}"),
+            },
+        )?;
+
+        // Encode with the library's bech32m implementation
+        let sp_addr = SpAddress::new(
+            self.scan_public,
+            b_m,
+            SpNetwork::from(self.network),
+            SpVersion::ZERO,
+        );
+        let address: String = sp_addr.into();
+
+        Ok(SilentPaymentAddress {
+            address,
+            scan_pubkey_hex: hex::encode(self.scan_public.serialize()),
+            spend_pubkey_hex: hex::encode(b_m.serialize()), // B_m, not B_spend
+            network: self.network,
+        })
     }
 
     pub fn export_scan_secret_hex(&self) -> HexStringResult {
@@ -429,6 +487,130 @@ impl SilentPaymentScanner {
 
         Ok(ScanTransactionResult { payments })
     }
+
+    /// Scan for both unlabeled payments AND labeled sub-address payments
+    /// in a single pass.
+    ///
+    /// # Performance
+    /// Label pubkeys are pre-computed once per scan call (not per output).
+    /// Cost: O(outputs × labels) point comparisons per k step.
+    /// For typical wallets (< 50 labels, < 100 outputs), this is negligible.
+    ///
+    /// # Arguments
+    /// * `labels` — label integers to check (e.g. `[1, 2, 3]`).
+    ///   Pass an empty vec to behave identically to `scan_transaction`.
+    ///
+    /// # Returns
+    /// `FoundPayment.label` tells you WHICH sub-address received the payment.
+    pub fn scan_transaction_with_labels(
+        &self,
+        sender_input_pubkeys_hex: Vec<String>,
+        tx_output_pubkeys_hex: Vec<String>,
+        output_amounts_sats: Vec<u64>,
+        labels: Vec<u32>,
+    ) -> Result<ScanTransactionResult, SilentPaymentError> {
+        if sender_input_pubkeys_hex.is_empty() {
+            return Err(SilentPaymentError::InvalidKey {
+                msg: "sender_input_pubkeys_hex must not be empty".into(),
+            });
+        }
+
+        let tweak_bytes = hex_to_33_bytes(&sender_input_pubkeys_hex[0])?;
+        let tweak_data = PublicKey::from_slice(&tweak_bytes).map_err(|e: secp256k1::Error| {
+            SilentPaymentError::InvalidKey {
+                msg: format!("Invalid tweak pubkey: {e}"),
+            }
+        })?;
+
+        let raw_ecdh = shared_secret_point(&tweak_data, &self.scan_secret);
+        let mut uncompressed = [0u8; 65];
+        uncompressed[0] = 0x04;
+        uncompressed[1..].copy_from_slice(&raw_ecdh);
+        let ecdh_pubkey = PublicKey::from_slice(&uncompressed)
+            .expect("shared_secret_point always returns a valid point");
+
+        // Pre-compute label pubkeys (outside the k loop)
+        // label_pubkeys[i] = (m, H_BIP0352/Label(b_scan || m) × G)
+        // Computed once here, reused for every k step.
+        let label_pubkeys: Vec<(u32, PublicKey)> = labels
+            .iter()
+            .map(|&m| compute_label_pubkey(&self.scan_secret, m).map(|pk| (m, pk)))
+            .collect::<Result<_, _>>()?;
+
+        // Scan k = 0, 1, 2, ...
+        let mut payments = Vec::new();
+        let mut k: u32 = 0;
+
+        loop {
+            // t_k = H_BIP0352/SharedSecret(compressed_ecdh || k)
+            // P_k = B_spend + t_k × G   (unlabeled expected output)
+            let t_k = compute_t_n(&ecdh_pubkey, k)?;
+            let p_k = compute_p_n(&self.spend_public, &t_k)?;
+            // let p_k_hex = hex::encode(p_k.serialize());
+            let expected_p_k_bytes = p_k.serialize(); // [02/03, x0, x1, ..., x31]
+            let expected_p_k_full_hex = hex::encode(&expected_p_k_bytes); // "02..." or "03..." — 66 chars
+            let expected_p_k_xonly_hex = hex::encode(&expected_p_k_bytes[1..]); // x-coord only — 64 chars
+
+            let mut found_this_k = false;
+
+            // Unlabeled check
+            if let Some(amount) = find_output_amount(
+                &expected_p_k_full_hex,
+                &expected_p_k_xonly_hex,
+                &tx_output_pubkeys_hex,
+                &output_amounts_sats,
+            ) {
+                payments.push(FoundPayment {
+                    output_index: k,
+                    tweak_hex: hex::encode(t_k.secret_bytes()),
+                    amount_sats: amount,
+                    label: None,
+                });
+                found_this_k = true;
+            }
+
+            // Labeled checks
+            // P_k_m = P_k + label_pubkey_m
+            //       = (B_spend + t_k × G) + (label_hash_m × G)
+            //       = B_m + t_k × G       where B_m = B_spend + label_hash_m × G
+            for &(m, ref label_pk) in &label_pubkeys {
+                let p_k_m =
+                    PublicKey::combine_keys(&[&p_k, label_pk]).map_err(|e: secp256k1::Error| {
+                        SilentPaymentError::CryptoError {
+                            msg: format!("Point addition failed for label {m}: {e}"),
+                        }
+                    })?;
+                // let p_k_m_hex = hex::encode(p_k_m.serialize());
+                let expected_p_k_m_bytes = p_k_m.serialize(); // [02/03, x0, x1, ..., x31]
+                let expected_p_k_m_full_hex = hex::encode(&expected_p_k_m_bytes); // "02..." or "03..." — 66 hex chars
+                let expected_p_k_m_xonly_hex = hex::encode(&expected_p_k_m_bytes[1..]); // x-coord only — 64 hex chars
+
+                if let Some(amount) = find_output_amount(
+                    &expected_p_k_m_full_hex,
+                    &expected_p_k_m_xonly_hex,
+                    &tx_output_pubkeys_hex,
+                    &output_amounts_sats,
+                ) {
+                    payments.push(FoundPayment {
+                        output_index: k,
+                        tweak_hex: hex::encode(t_k.secret_bytes()),
+                        amount_sats: amount,
+                        label: Some(m),
+                    });
+                    found_this_k = true;
+                }
+            }
+
+            // BIP-352: stop scanning when the current k produces no match
+            // (neither unlabeled nor any label). Further k values won't match.
+            if !found_this_k {
+                break;
+            }
+            k += 1;
+        }
+
+        Ok(ScanTransactionResult { payments })
+    }
 }
 
 // Free functions
@@ -546,7 +728,7 @@ pub fn create_silent_payment_outputs(
             }
         };
 
-        // ECDH: shared_secret = partial_secret × B_scan
+        // shared_secret = partial_secret × B_scan
         // shared_secret_point is constant-time (important since we're using a private key)
         let raw_ecdh = shared_secret_point(&scan_pk, &partial_scalar);
         let mut uncompressed = [0u8; 65];
@@ -651,7 +833,6 @@ pub fn compute_sender_tweak_data(
 }
 
 // Helpers
-
 fn hex_to_32_bytes(s: &str) -> Result<[u8; 32], SilentPaymentError> {
     hex::decode(s)
         .map_err(|e| SilentPaymentError::EncodingError { msg: e.to_string() })?
@@ -670,8 +851,8 @@ fn hex_to_33_bytes(s: &str) -> Result<[u8; 33], SilentPaymentError> {
         })
 }
 
-/// Parse a bech32m BIP-352 address using the silentpayment library.
-/// Delegates to the Silentpayment library's TryFrom<&str> implementation which validates:
+/// Parse a bech32m BIP-352 address using the silentpayment
+/// library's TryFrom<&str> implementation which validates:
 /// - bech32m checksum
 /// - HRP (sp / tsp / sprt)
 /// - payload length (107 base32 chars = version + 33 + 33 bytes)
@@ -680,4 +861,20 @@ fn parse_sp_address(addr: &str) -> Result<(PublicKey, PublicKey), SilentPaymentE
     let sp_addr = SpAddress::try_from(addr)
         .map_err(|e| SilentPaymentError::InvalidAddress { msg: e.to_string() })?;
     Ok((sp_addr.get_scan_key(), sp_addr.get_spend_key()))
+}
+
+/// find an output amount by pubkey hex.
+fn find_output_amount(
+    expected_hex: &str,
+    expected_xonly_hex: &str,
+    output_pubkeys: &[String],
+    amounts: &[u64],
+) -> Option<u64> {
+    output_pubkeys
+        .iter()
+        .zip(amounts.iter())
+        .find(|(pk_hex, _)| {
+            pk_hex.as_str() == expected_hex || pk_hex.as_str() == expected_xonly_hex
+        })
+        .map(|(_, &amount)| amount)
 }
