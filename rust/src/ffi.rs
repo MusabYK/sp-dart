@@ -411,7 +411,6 @@ impl SilentPaymentScanner {
         &self,
         sender_input_pubkeys_hex: Vec<String>,
         tx_output_pubkeys_hex: Vec<String>,
-        output_amounts_sats: Vec<u64>,
     ) -> Result<ScanTransactionResult, SilentPaymentError> {
         // In mobile mode, sender_input_pubkeys_hex contains a single entry:
         // the pre-computed tweak from the index server.
@@ -463,21 +462,24 @@ impl SilentPaymentScanner {
             let expected_full = hex::encode(&expected_bytes);
             let expected_xonly = hex::encode(&expected_bytes[1..]);
 
-            let matched = tx_output_pubkeys_hex
+            let matched_vout = tx_output_pubkeys_hex
                 .iter()
-                .zip(output_amounts_sats.iter())
-                .find(|(pk_hex, _)| {
+                .enumerate()
+                .find(|(_, pk_hex)| {
                     // 66-char compressed match OR 64-char x-only match (taproot uses x-only)
-                    *pk_hex == &expected_full || *pk_hex == &expected_xonly
-                });
+                    // *pk_hex == &expected_full || *pk_hex == &expected_xonly
+                    pk_hex.as_str() == expected_full.as_str()
+                        || pk_hex.as_str() == expected_xonly.as_str()
+                })
+                .map(|(vout, _)| vout as u32);
 
-            match matched {
-                Some((_, &amount)) => {
+            match matched_vout {
+                Some(vout) => {
                     payments.push(FoundPayment {
-                        output_index: k,
+                        output_index: vout,
                         tweak_hex: hex::encode(t_k.secret_bytes()),
-                        amount_sats: amount,
-                        label: None, // Required for Labeled Adresses
+                        amount_sats: 0,
+                        label: None,
                     });
                     k += 1;
                 }
@@ -506,7 +508,6 @@ impl SilentPaymentScanner {
         &self,
         sender_input_pubkeys_hex: Vec<String>,
         tx_output_pubkeys_hex: Vec<String>,
-        output_amounts_sats: Vec<u64>,
         labels: Vec<u32>,
     ) -> Result<ScanTransactionResult, SilentPaymentError> {
         if sender_input_pubkeys_hex.is_empty() {
@@ -546,24 +547,26 @@ impl SilentPaymentScanner {
             // P_k = B_spend + t_k × G   (unlabeled expected output)
             let t_k = compute_t_n(&ecdh_pubkey, k)?;
             let p_k = compute_p_n(&self.spend_public, &t_k)?;
-            // let p_k_hex = hex::encode(p_k.serialize());
-            let expected_p_k_bytes = p_k.serialize(); // [02/03, x0, x1, ..., x31]
-            let expected_p_k_full_hex = hex::encode(&expected_p_k_bytes); // "02..." or "03..." — 66 chars
-            let expected_p_k_xonly_hex = hex::encode(&expected_p_k_bytes[1..]); // x-coord only — 64 chars
+            let p_k_bytes = p_k.serialize();
+            let p_k_full = hex::encode(&p_k_bytes);
+            let p_k_xonly = hex::encode(&p_k_bytes[1..]);
 
             let mut found_this_k = false;
 
-            // Unlabeled check
-            if let Some(amount) = find_output_amount(
-                &expected_p_k_full_hex,
-                &expected_p_k_xonly_hex,
-                &tx_output_pubkeys_hex,
-                &output_amounts_sats,
-            ) {
+            // ── Unlabeled check ───────────────────────────────────────────────
+            let unlabeled_vout = tx_output_pubkeys_hex
+                .iter()
+                .enumerate()
+                .find(|(_, pk_hex)| {
+                    pk_hex.as_str() == p_k_full.as_str() || pk_hex.as_str() == p_k_xonly.as_str()
+                })
+                .map(|(vout, _)| vout as u32);
+
+            if let Some(vout) = unlabeled_vout {
                 payments.push(FoundPayment {
-                    output_index: k,
+                    output_index: vout,
                     tweak_hex: hex::encode(t_k.secret_bytes()),
-                    amount_sats: amount,
+                    amount_sats: 0,
                     label: None,
                 });
                 found_this_k = true;
@@ -580,21 +583,24 @@ impl SilentPaymentScanner {
                             msg: format!("Point addition failed for label {m}: {e}"),
                         }
                     })?;
-                // let p_k_m_hex = hex::encode(p_k_m.serialize());
-                let expected_p_k_m_bytes = p_k_m.serialize(); // [02/03, x0, x1, ..., x31]
-                let expected_p_k_m_full_hex = hex::encode(&expected_p_k_m_bytes); // "02..." or "03..." — 66 hex chars
-                let expected_p_k_m_xonly_hex = hex::encode(&expected_p_k_m_bytes[1..]); // x-coord only — 64 hex chars
+                let p_k_m_bytes = p_k_m.serialize();
+                let p_k_m_full = hex::encode(&p_k_m_bytes);
+                let p_k_m_xonly = hex::encode(&p_k_m_bytes[1..]);
 
-                if let Some(amount) = find_output_amount(
-                    &expected_p_k_m_full_hex,
-                    &expected_p_k_m_xonly_hex,
-                    &tx_output_pubkeys_hex,
-                    &output_amounts_sats,
-                ) {
+                let labeled_vout = tx_output_pubkeys_hex
+                    .iter()
+                    .enumerate()
+                    .find(|(_, pk_hex)| {
+                        pk_hex.as_str() == p_k_m_full.as_str()
+                            || pk_hex.as_str() == p_k_m_xonly.as_str()
+                    })
+                    .map(|(vout, _)| vout as u32);
+
+                if let Some(vout) = labeled_vout {
                     payments.push(FoundPayment {
-                        output_index: k,
+                        output_index: vout,
                         tweak_hex: hex::encode(t_k.secret_bytes()),
-                        amount_sats: amount,
+                        amount_sats: 0,
                         label: Some(m),
                     });
                     found_this_k = true;
@@ -861,20 +867,4 @@ fn parse_sp_address(addr: &str) -> Result<(PublicKey, PublicKey), SilentPaymentE
     let sp_addr = SpAddress::try_from(addr)
         .map_err(|e| SilentPaymentError::InvalidAddress { msg: e.to_string() })?;
     Ok((sp_addr.get_scan_key(), sp_addr.get_spend_key()))
-}
-
-/// find an output amount by pubkey hex.
-fn find_output_amount(
-    expected_hex: &str,
-    expected_xonly_hex: &str,
-    output_pubkeys: &[String],
-    amounts: &[u64],
-) -> Option<u64> {
-    output_pubkeys
-        .iter()
-        .zip(amounts.iter())
-        .find(|(pk_hex, _)| {
-            pk_hex.as_str() == expected_hex || pk_hex.as_str() == expected_xonly_hex
-        })
-        .map(|(_, &amount)| amount)
 }
