@@ -868,19 +868,3 @@ fn parse_sp_address(addr: &str) -> Result<(PublicKey, PublicKey), SilentPaymentE
         .map_err(|e| SilentPaymentError::InvalidAddress { msg: e.to_string() })?;
     Ok((sp_addr.get_scan_key(), sp_addr.get_spend_key()))
 }
-
-/// find an output amount by pubkey hex.
-fn find_output_amount(
-    expected_hex: &str,
-    expected_xonly_hex: &str,
-    output_pubkeys: &[String],
-    amounts: &[u64],
-) -> Option<u64> {
-    output_pubkeys
-        .iter()
-        .zip(amounts.iter())
-        .find(|(pk_hex, _)| {
-            pk_hex.as_str() == expected_hex || pk_hex.as_str() == expected_xonly_hex
-        })
-        .map(|(_, &amount)| amount)
-}
