@@ -109,7 +109,6 @@ class _HomePageState extends State<HomePage> {
       final result = scanner.scanTransaction(
         senderInputPubkeysHex: [tweakData.value],
         txOutputPubkeysHex: outputs.map((o) => o.pubkeyHex).toList(),
-        outputAmountsSats: [70000],
       );
 
       _setOutput(
@@ -126,6 +125,83 @@ class _HomePageState extends State<HomePage> {
       _setOutput('${e.runtimeType}: $e');
     } catch (e) {
       _setOutput('$e');
+    } finally {
+      recipient?.dispose();
+      senderKeypair?.dispose();
+      scanner?.dispose();
+      setState(() => _loading = false);
+    }
+  }
+
+  void _demonstrateLabels() {
+    SilentPaymentRecipient? recipient;
+    SilentPaymentRecipient? senderKeypair;
+    SilentPaymentScanner? scanner;
+
+    try {
+      recipient = SilentPaymentRecipient.generate(network: NetworkFfi.signet);
+      senderKeypair = SilentPaymentRecipient.generate(
+        network: NetworkFfi.signet,
+      );
+
+      final senderPrivKey = senderKeypair.exportScanSecretHex().value;
+      // final senderPubKey = senderKeypair.getAddress().scanPubkeyHex;
+
+      final standardAddr = recipient.getAddress();
+      final label1Addr = recipient.getLabeledAddress(label: 1);
+      final label2Addr = recipient.getLabeledAddress(label: 2);
+
+      final senderInputs = [
+        SendingInput(
+          secretKeyHex: senderPrivKey,
+          isTaproot: false, // P2WPKH — most common wallet input type
+          txid:
+              'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2',
+          vout: 0,
+        ),
+      ];
+      // Sender pays to label 1
+      final outputs = createSilentPaymentOutputs(
+        inputs: senderInputs,
+        recipients: [
+          PaymentRecipient(address: label1Addr.address, amountSats: 75000),
+        ],
+      );
+
+      final tweakData = computeSenderTweakData(inputs: senderInputs);
+
+      scanner = SilentPaymentScanner.watchOnly(
+        scanSecretHex: recipient.exportScanSecretHex().value,
+        spendPubkeyHex: recipient.exportSpendPubkeyHex().value,
+      );
+
+      final result = scanner.scanTransactionWithLabels(
+        senderInputPubkeysHex: [tweakData.value],
+        txOutputPubkeysHex: outputs.map((o) => o.pubkeyHex).toList(),
+        labels: [1, 2, 3],
+      );
+
+      if (result.payments.isEmpty) {
+        _setOutput('Label demo failed — crypto mismatch');
+        return;
+      }
+
+      final std = standardAddr.address;
+      final lbl1 = label1Addr.address;
+      final lbl2 = label2Addr.address;
+      final payment = result.payments.first;
+      _setOutput(
+        'Label Demo\n\n'
+        'Standard addr : ${'${std.substring(0, 8)}...${std.substring(std.length - 20)}'}\n'
+        'Label 1 addr  : ${'${lbl1.substring(0, 8)}...${lbl1.substring(lbl1.length - 20)}'}\n'
+        'Label 2 addr  : ${'${lbl2.substring(0, 8)}...${lbl2.substring(lbl2.length - 20)}'}\n\n'
+        'Payment detected on label: ${payment.label ?? "unlabeled"}\n'
+        '   Amount : ${payment.amountSats} sats',
+      );
+    } on SilentPaymentException catch (e) {
+      _setOutput(e.toString());
+    } catch (e) {
+      _setOutput(e.toString());
     } finally {
       recipient?.dispose();
       senderKeypair?.dispose();
@@ -220,6 +296,13 @@ class _HomePageState extends State<HomePage> {
           label: const Text('End-to-End Demo (Offline)'),
         ),
 
+        const SizedBox(height: 8),
+
+        OutlinedButton.icon(
+          onPressed: _loading ? null : _demonstrateLabels,
+          icon: const Icon(Icons.label_outline),
+          label: const Text('Label Demo'),
+        ),
         const SizedBox(height: 8),
 
         // Progress
