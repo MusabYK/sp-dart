@@ -29,7 +29,7 @@ class _HomePageState extends State<HomePage> {
 
     SilentPaymentRecipient? recipient;
     try {
-      recipient = SilentPaymentRecipient.generate(network: NetworkFfi.signet);
+      recipient = SilentPaymentRecipient.generate(network: Network.signet);
 
       final address = recipient.getAddress();
       _address = address.address;
@@ -59,10 +59,8 @@ class _HomePageState extends State<HomePage> {
     SilentPaymentScanner? scanner;
 
     try {
-      recipient = SilentPaymentRecipient.generate(network: NetworkFfi.testnet);
-      senderKeypair = SilentPaymentRecipient.generate(
-        network: NetworkFfi.testnet,
-      );
+      recipient = SilentPaymentRecipient.generate(network: Network.testnet);
+      senderKeypair = SilentPaymentRecipient.generate(network: Network.testnet);
 
       final recipientAddr = recipient.getAddress();
       final senderPrivKey = senderKeypair.exportScanSecretHex().value;
@@ -139,10 +137,8 @@ class _HomePageState extends State<HomePage> {
     SilentPaymentScanner? scanner;
 
     try {
-      recipient = SilentPaymentRecipient.generate(network: NetworkFfi.signet);
-      senderKeypair = SilentPaymentRecipient.generate(
-        network: NetworkFfi.signet,
-      );
+      recipient = SilentPaymentRecipient.generate(network: Network.signet);
+      senderKeypair = SilentPaymentRecipient.generate(network: Network.signet);
 
       final senderPrivKey = senderKeypair.exportScanSecretHex().value;
       // final senderPubKey = senderKeypair.getAddress().scanPubkeyHex;

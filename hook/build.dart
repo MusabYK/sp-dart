@@ -16,7 +16,7 @@ void main(List<String> args) async {
     await RustBuilder(
       // Path to the Rust crate, relative to the Flutter package root.
       // native_toolchain_rust looks for Cargo.toml at rust/Cargo.toml.
-      cratePath: 'rust',
+      cratePath: 'native',
 
       // CRITICAL: must match the asset name in the generated Dart code.
       // Generated code uses: "package:sp_flutter/uniffi:spffi"
