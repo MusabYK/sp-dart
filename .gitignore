@@ -1,8 +1,8 @@
 # Rust
 /target
-rust/target/
+native/target/
 **/*.rs.bk
-Cargo.lock
+nativeCargo.lock
 
 # Flutter/Dart
 **/build/

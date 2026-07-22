@@ -8,7 +8,7 @@ void main() {
   try {
     // RECIPIENT KEY GENERATION
     print('✅ Generating BIP-352 keys in Rust...');
-    recipient = SilentPaymentRecipient.generate(network: NetworkFfi.signet);
+    recipient = SilentPaymentRecipient.generate(network: Network.signet);
 
     final recipientScanSecretHex = recipient.exportScanSecretHex().value;
     final recipientSpendPubkeyHex = recipient.exportSpendPubkeyHex().value;
@@ -47,7 +47,7 @@ void main() {
     // A sender is not a SilentPaymentRecipient.
     // The sender merely owns spendable UTXOs.
     // A real sender wallet might not even support receiving silent payments.
-    senderKeypair = SilentPaymentRecipient.generate(network: NetworkFfi.signet);
+    senderKeypair = SilentPaymentRecipient.generate(network: Network.signet);
 
     // In production this is actually the sender's input private key (the private key
     // of the UTXO being spent), not his secret key.

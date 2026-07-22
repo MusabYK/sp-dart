@@ -5,13 +5,13 @@ set shell := ["sh", "-c"]
 
 set windows-shell := ["powershell.exe", "-Command"]
 
-windows_generate_bindings := "dart --version; if (-not $?) { exit 1 }; dart pub get; if (-not $?) { exit 1 }; cd rust; if (-not $?) { exit 1 }; cargo build --profile dev; if (-not $?) { exit 1 }; cargo run --profile dev --bin uniffi-bindgen -- generate --library target/debug/sp_dart_ffi.dll --language dart --config uniffi.toml --out-dir ../lib/src/generated"
+windows_generate_bindings := "dart --version; if (-not $?) { exit 1 }; dart pub get; if (-not $?) { exit 1 }; cd native; if (-not $?) { exit 1 }; cargo build --profile dev; if (-not $?) { exit 1 }; cargo run --profile dev --bin uniffi-bindgen -- generate --library target/debug/sp_dart_ffi.dll --language dart --config uniffi.toml --out-dir ../lib/src/generated"
 
 unix_generate_bindings := "bash ./scripts/generate_bindings.sh"
 
-windows_clean := "'.dart_tool', 'build', 'rust/target', 'coverage', 'sp_demo/.dart_tool', 'sp_demo/build', 'example/.dart_tool', 'example/build' | Where-Object { Test-Path $_ } | ForEach-Object { Remove-Item -Recurse -Force $_ }"
+windows_clean := "'.dart_tool', 'build', 'native/target', 'coverage', 'sp_demo/.dart_tool', 'sp_demo/build', 'example/.dart_tool', 'example/build' | Where-Object { Test-Path $_ } | ForEach-Object { Remove-Item -Recurse -Force $_ }"
 
-unix_clean := "rm -rf .dart_tool/ build/ rust/target/ coverage/ sp_demo/.dart_tool/ sp_demo/build/ example/.dart_tool/ example/build/"
+unix_clean := "rm -rf .dart_tool/ build/ native/target/ coverage/ sp_demo/.dart_tool/ sp_demo/build/ example/.dart_tool/ example/build/"
 
 opener := if os_family() == "windows" { "Start-Process" } else if os() == "macos" { "open" } else { "xdg-open" }
 
