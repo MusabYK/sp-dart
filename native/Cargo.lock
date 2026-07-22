@@ -149,6 +149,7 @@ dependencies = [
 [[package]]
 name = "bdk-ffi"
 version = "3.1.0-alpha.0"
+source = "git+https://github.com/MusabYK/bdk-ffi.git?branch=silentpayments#18b1e44fa515c3437d2e461c33dca8f10fcd58f2"
 dependencies = [
  "bdk_electrum",
  "bdk_esplora",
