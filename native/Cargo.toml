@@ -19,8 +19,8 @@ name = "uniffi-bindgen"
 path = "uniffi-bindgen.rs"
 
 [dependencies]
-#bdk-ffi = { package = "bdk-ffi", git = "https://github.com/MusabYK/bdk-ffi.git", branch = "silentpayments" } #Use this when testing against the remote repository.
-bdk-ffi = { package = "bdk-ffi", path = "../../bdk-ffi/bdk-ffi" } #Use this for Local Development
+bdk-ffi = { package = "bdk-ffi", git = "https://github.com/MusabYK/bdk-ffi.git", branch = "silentpayments" } #Use this when testing against the remote repository.
+#bdk-ffi = { package = "bdk-ffi", path = "../../bdk-ffi/bdk-ffi" } #Use this for Local Development
 uniffi = { version = "=0.31.2", features = ["cli"] }
 uniffi-dart = { git = "https://github.com/Uniffi-Dart/uniffi-dart", tag = "v0.2.1+v0.31.2", features = ["build"] }
 camino = "1.2"
