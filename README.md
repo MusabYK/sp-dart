@@ -1,6 +1,6 @@
 # sp_dart
 
-An experimental library to research the implementation of silent payments (BIP-352) in [bdk_dart](https://github.com/bitcoindevkit/bdk-dart)
+An experimental library to research the implementation of silent payments (BIP-352) in [bdk-ffi](https://github.com/bitcoindevkit/bdk-ffi) and [bdk_dart](https://github.com/bitcoindevkit/bdk-dart)
 
 ---
 * **Core SP Logic:** Built on top of the [spdk](https://github.com/cygnet3/spdk) repository.
